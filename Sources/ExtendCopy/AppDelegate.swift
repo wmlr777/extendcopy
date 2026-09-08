@@ -108,9 +108,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard requestAccessibilityIfNeeded() else { return }
 
         clipboardBeforeCopy = pasteboard.string(forType: .string) ?? ""
+        isCapturing = true
+
+        // The Carbon hot-key callback can arrive while Command and Shift are
+        // still physically held. Posting Command-C at that instant is treated
+        // as Command-Shift-C by many apps, so wait for the original shortcut
+        // to be released before synthesizing the normal Copy command.
+        waitForShortcutRelease(deadline: Date().addingTimeInterval(1.5))
+    }
+
+    private func waitForShortcutRelease(deadline: Date) {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let shortcutIsStillDown = flags.contains(.maskCommand) || flags.contains(.maskShift)
+        if shortcutIsStillDown, Date() < deadline {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+                self?.waitForShortcutRelease(deadline: deadline)
+            }
+            return
+        }
+
+        sendCopyKeystroke()
+    }
+
+    private func sendCopyKeystroke() {
         changeCountBeforeCopy = pasteboard.changeCount
         captureStartedAt = Date()
-        isCapturing = true
 
         guard let source = CGEventSource(stateID: .hidSystemState),
               let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: true),
@@ -131,20 +153,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pollClipboard() {
         if pasteboard.changeCount != changeCountBeforeCopy {
-            guard let selection = pasteboard.string(forType: .string), !selection.isEmpty else {
-                finishCapture(success: false, message: "当前内容不是可追加的文字")
+            if let selection = pasteboard.string(forType: .string), !selection.isEmpty {
+                previousClipboard = clipboardBeforeCopy
+                let combined = AppendEngine.combine(
+                    previous: clipboardBeforeCopy,
+                    selection: selection,
+                    separator: separator
+                )
+                pasteboard.clearContents()
+                pasteboard.setString(combined, forType: .string)
+                finishCapture(success: true)
                 return
             }
-            previousClipboard = clipboardBeforeCopy
-            let combined = AppendEngine.combine(
-                previous: clipboardBeforeCopy,
-                selection: selection,
-                separator: separator
-            )
-            pasteboard.clearContents()
-            pasteboard.setString(combined, forType: .string)
-            finishCapture(success: true)
-        } else if Date().timeIntervalSince(captureStartedAt) > 1.2 {
+
+            // Some apps publish pasteboard representations in more than one
+            // pass. Keep polling briefly instead of failing on the first
+            // change-count update before the string representation is ready.
+        }
+
+        if Date().timeIntervalSince(captureStartedAt) > 2.0 {
             finishCapture(success: false, message: "没有检测到选中的文字")
         }
     }
