@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pasteboard = NSPasteboard.general
     private var statusItem: NSStatusItem!
     private var hotKey: GlobalHotKey?
+    private var clipboardViewer: ClipboardViewerWindowController?
     private var previousClipboard: String?
     private var captureTimer: Timer?
     private var captureStartedAt = Date.distantPast
@@ -59,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         undo.keyEquivalentModifierMask = [.command]
         undo.isEnabled = previousClipboard != nil
         menu.addItem(undo)
+
+        let viewClipboard = NSMenuItem(title: "查看剪贴板…", action: #selector(viewClipboard), keyEquivalent: "")
+        viewClipboard.target = self
+        menu.addItem(viewClipboard)
 
         let clear = NSMenuItem(title: "清空剪贴板", action: #selector(clearClipboard), keyEquivalent: "")
         clear.target = self
@@ -205,6 +210,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.previousClipboard = nil
         rebuildMenu()
         flashStatus(success: true)
+    }
+
+    @objc private func viewClipboard() {
+        if clipboardViewer == nil {
+            clipboardViewer = ClipboardViewerWindowController(pasteboard: pasteboard)
+        }
+        clipboardViewer?.present()
     }
 
     @objc private func clearClipboard() {
