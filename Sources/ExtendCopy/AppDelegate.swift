@@ -15,6 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var clipboardBeforeCopy = ""
     private var isCapturing = false
 
+    private var isFeatureEnabled: Bool {
+        get {
+            guard UserDefaults.standard.object(forKey: "featureEnabled") != nil else { return true }
+            return UserDefaults.standard.bool(forKey: "featureEnabled")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "featureEnabled") }
+    }
+
     private var separator: CopySeparator {
         get {
             guard let raw = UserDefaults.standard.string(forKey: "separator"),
@@ -26,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
-        registerHotKey()
+        if isFeatureEnabled { registerHotKey() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -35,10 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "ExtendCopy")
-            button.toolTip = "ExtendCopy：⌘⇧C 追加复制"
-        }
+        updateStatusAppearance()
         rebuildMenu()
     }
 
@@ -49,10 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(title)
         menu.addItem(.separator())
 
+        let enabled = NSMenuItem(title: "启用追加复制", action: #selector(toggleFeature), keyEquivalent: "")
+        enabled.target = self
+        enabled.state = isFeatureEnabled ? .on : .off
+        menu.addItem(enabled)
+
+        menu.addItem(.separator())
+
         let append = NSMenuItem(title: "追加复制", action: #selector(appendCopy), keyEquivalent: "")
         append.target = self
         append.keyEquivalentModifierMask = [.command, .shift]
         append.keyEquivalent = "c"
+        append.isEnabled = isFeatureEnabled
         menu.addItem(append)
 
         let undo = NSMenuItem(title: "撤销上一次追加", action: #selector(undoLastAppend), keyEquivalent: "z")
@@ -93,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerHotKey() {
+        guard hotKey == nil else { return }
         let hotKey = GlobalHotKey { [weak self] in
             Task { @MainActor in self?.startAppendCopy() }
         }
@@ -100,8 +114,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try hotKey.register()
             self.hotKey = hotKey
         } catch {
+            self.hotKey = nil
+            isFeatureEnabled = false
+            updateStatusAppearance()
+            rebuildMenu()
             showAlert(title: "快捷键注册失败", message: error.localizedDescription)
         }
+    }
+
+    @objc private func toggleFeature() {
+        isFeatureEnabled.toggle()
+        if isFeatureEnabled {
+            registerHotKey()
+        } else {
+            captureTimer?.invalidate()
+            captureTimer = nil
+            isCapturing = false
+            hotKey = nil
+        }
+        updateStatusAppearance()
+        rebuildMenu()
     }
 
     @objc private func appendCopy() {
@@ -109,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startAppendCopy() {
+        guard isFeatureEnabled else { return }
         guard !isCapturing else { return }
         guard requestAccessibilityIfNeeded() else { return }
 
@@ -196,11 +229,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             accessibilityDescription: success ? "追加成功" : "追加失败"
         )
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.statusItem.button?.image = NSImage(
-                systemSymbolName: "doc.on.clipboard",
-                accessibilityDescription: "ExtendCopy"
-            )
+            self?.updateStatusAppearance()
         }
+    }
+
+    private func updateStatusAppearance() {
+        let symbolName = isFeatureEnabled ? "doc.on.clipboard" : "pause.circle"
+        let description = isFeatureEnabled ? "ExtendCopy 已启用" : "ExtendCopy 已关闭"
+        statusItem?.button?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: description)
+        statusItem?.button?.toolTip = isFeatureEnabled
+            ? "ExtendCopy：⌘⇧C 追加复制"
+            : "ExtendCopy：追加复制已关闭"
     }
 
     @objc private func undoLastAppend() {
